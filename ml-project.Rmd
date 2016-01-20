@@ -1,0 +1,111 @@
+---
+title: "ML Prediction Assignment"
+author: "Danny Fraser"
+date: "January 2016"
+output: html_document
+---
+
+### Introduction
+
+This is a machine learning experiment intended to model and predict the quality of weight lifting technique using a [dataset][har] provided by the Human Activity Recognition group at Groupware@LES.
+
+The dataset contains a number of sensor measurements as well as an overall class of lifting technique (A-E). This experiment will use those measurements to predict the class.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+library(dplyr)
+library(parallel)
+library(doParallel)
+
+dirs <- c("data", "output")
+
+sapply(dirs, FUN = function(d){if (!dir.exists(d)) {dir.create(d)}})
+
+#we'll use this to load the model during testing
+LOAD_MODEL <- TRUE
+
+```
+
+First we need to download the data:
+```{r getData, message=FALSE, warning=FALSE}
+TRAIN_URL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+TEST_URL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+TRAIN_FILE <- "data/train.csv"
+TEST_FILE <- "data/test.csv"
+
+if (!file.exists(TRAIN_FILE)) { download.file(TRAIN_URL, TRAIN_FILE) }
+if (!file.exists(TEST_FILE)) { download.file(TEST_URL, TEST_FILE) }
+
+training <- read.csv(TRAIN_FILE)
+testing <- read.csv(TEST_FILE)
+```
+
+Some analysis of the training dataset shows that the variable `new_window` identifies two separate types of data. Where `new_window` is 'yes', the row contains summary statistics for the exercise. Where it is 'no', it is the individual measurements from the exercise. We will exclude rows where `new_window` is 'yes', and will remove the summary statistics columns from the dataset.
+
+We will also remove the time series element, as the testing set does not rely on this so we can assume it is not important.
+
+Some other items we do not need are the person carrying out the exercise, the row number, and the window number (the exercise id, essentially).
+```{r prepareData}
+training <- filter(training, new_window == 'no') %>% 
+    select(-matches("^amplitude_.*|^avg_.*|^kurtosis_.*|^max_.*|^min_.*|^skewness_.*|^stddev_.*|^var_.*")) %>% 
+    select(-c(X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, num_window, new_window))
+```
+
+We can now check if our dataset is tidy
+```{r tidyCheck}
+    sum(is.na(training))
+```
+
+This is good - there are no missing values left in our data after removing the summary statistics and non-essential columns.
+
+
+Now it's time to fit the model to predict the technique class. the model used here is a Random Forest with 10-fold cross-validation, run in parallel using the `parallel` and `doParallel` libraries.
+
+Random Forest was chosen due to its reputation for accuracy, and in this instance processing time was not a concern.
+
+```{r cluster, include=FALSE}
+# set up parallel processing
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+```
+```{r fitModel, message=FALSE, warning=FALSE}
+set.seed(1234)
+if (LOAD_MODEL) {
+    load(file = "model.RData")
+} else {
+    control <- trainControl(method = "cv", number = 10, allowParallel = TRUE)
+    model <- train(classe ~ ., data = training, method = "rf", trControl = control)
+    save(model, file = "model.RData")
+}
+```
+```{r decluster, include=FALSE}
+#free the processor
+stopCluster(cluster)
+```
+
+
+Finally we'll use the model to predict the technique class of the testing set
+```{r predict, message = FALSE, warning = FALSE}
+pred <- predict(model, testing)
+```
+```{r predOutput, echo=FALSE}
+pred
+```
+
+This prediction was validated against the Coursera quiz and scored **20/20**.
+
+For a closer look at the accuracy of the model, we can inspect the model results:
+```{r modelResults}
+    model$results[1,]
+```
+
+This shows an accuracy of over 99%, so we can be confident that repeated testing on more samples would give accurate classifications. The probability of us correctly classifying another 20 samples is
+```{r probability, echo=TRUE}
+    model$results[1,2] ^ 20
+```
+
+
+[har]: http://groupware.les.inf.puc-rio.br/har "Human Activity Recognition"
